@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CNIC A4 Print Maker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+:root{
+  --bg:#f4f5f7; --panel:#ffffff; --ink:#1a1d23; --sub:#6b7280; --line:#e3e5e9;
+  --accent:#0f6e5e; --accent2:#0a5346;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  box-sizing:border-box;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --bg:#14161a; --panel:#1d2026; --ink:#f2f3f5; --sub:#9aa0aa; --line:#2b2f36; }
+}
+:root[data-theme="dark"]{ --bg:#14161a; --panel:#1d2026; --ink:#f2f3f5; --sub:#9aa0aa; --line:#2b2f36; }
+*{box-sizing:border-box;}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:0;}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:10px 14px;font-weight:600;font-size:14px;cursor:pointer;}
+.btn:hover{background:var(--accent2);}
+.btn.sec{background:transparent;color:var(--accent);border:1.5px solid var(--accent);}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+input[type=range]{width:100%;accent-color:var(--accent);}
+label.small{font-size:12px;color:var(--sub);display:block;margin-bottom:2px;}
+.wrap{max-width:900px;margin:0 auto;padding:14px;}
+.cropbox{position:relative;overflow:auto;border:1px dashed var(--line);border-radius:10px;background:repeating-conic-gradient(#0000 0 25%, #8881 0 50%) 0 0/16px 16px;touch-action:none;}
+.handle{position:absolute;width:20px;height:20px;background:var(--accent);border:2px solid #fff;border-radius:50%;transform:translate(-50%,-50%);cursor:grab;touch-action:none;}
+.rectline{position:absolute;border:2px solid var(--accent);pointer-events:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 style="font-size:20px;font-weight:800;margin:6px 0 2px;">CNIC A4 Print Maker</h1>
+  <p style="font-size:13px;color:var(--sub);margin:0 0 12px;">All processing happens on your device. Nothing is uploaded to any server. Images are cleared automatically — use <b>Save</b> to keep a copy.</p>
+
+  <div id="sides" class="grid" style="display:grid;grid-template-columns:1fr;gap:14px;"></div>
+
+  <div class="card" style="margin-top:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <div style="font-weight:700;">Card size</div>
+      <div style="display:flex;gap:10px;align-items:center;font-size:13px;">
+        <label><input type="radio" name="sizeMode" value="std" checked> Standard CNIC (85.6×54.0mm)</label>
+        <label><input type="radio" name="sizeMode" value="custom"> Custom</label>
+      </div>
+    </div>
+    <div id="customSize" style="display:none;margin-top:8px;gap:8px;" class="grid grid-cols-2">
+      <div><label class="small">Width (mm)</label><input id="cw" type="number" value="85.6" step="0.1" class="w-full border rounded p-2 text-sm" style="background:var(--bg);border-color:var(--line);color:var(--ink);"></div>
+      <div><label class="small">Height (mm)</label><input id="ch" type="number" value="54.0" step="0.1" class="w-full border rounded p-2 text-sm" style="background:var(--bg);border-color:var(--line);color:var(--ink);"></div>
+    </div>
+    <p style="font-size:12px;color:var(--sub);margin-top:8px;">Layout is fixed at 2 columns × 4 rows (8 copies/page) with margins and gaps calculated automatically for perfectly equal spacing.</p>
+  </div>
+
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+    <button class="btn" id="btnPreview">Preview A4</button>
+    <button class="btn sec" id="btnPDF" disabled>Create A4 PDF</button>
+    <button class="btn sec" id="btnPrint" disabled>Print</button>
+    <button class="btn sec" id="btnDelete">Delete Images</button>
+  </div>
+
+  <div id="previewArea" style="margin-top:16px;"></div>
+</div>
+
+<script>
+const A4W=210, A4H=297, COLS=2, ROWS=4;
+function cardSize(){
+  if(document.querySelector('input[name=sizeMode]:checked').value==='custom'){
+    return {w:parseFloat(document.getElementById('cw').value)||85.6, h:parseFloat(document.getElementById('ch').value)||54.0};
+  }
+  return {w:85.6,h:54.0};
+}
+document.querySelectorAll('input[name=sizeMode]').forEach(r=>r.onchange=()=>{
+  document.getElementById('customSize').style.display = document.querySelector('input[name=sizeMode]:checked').value==='custom' ? 'grid':'none';
+});
+
+function makeSide(key,label){
+  const el=document.createElement('div'); el.className='card';
+  el.innerHTML=`
+  <div style="font-weight:700;margin-bottom:8px;">${label}</div>
+  <input type="file" accept="image/jpeg,image/png" id="file_${key}" class="text-sm">
+  <div id="stage_${key}" style="display:none;margin-top:10px;">
+    <div class="cropbox" id="cropbox_${key}" style="max-height:340px;">
+      <img id="img_${key}" style="display:block;max-width:100%;">
+      <div class="rectline" id="rect_${key}"></div>
+      <div class="handle" id="h_${key}_tl"></div>
+      <div class="handle" id="h_${key}_br"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+      <button class="btn sec" id="rot_${key}">Rotate 90°</button>
+      <button class="btn sec" id="apply_${key}">Apply Crop</button>
+      <button class="btn sec" id="enh_${key}">Auto Enhance</button>
+      <button class="btn sec" id="reset_${key}">Reset</button>
+    </div>
+    <div style="margin-top:8px;">
+      <label class="small">Brightness</label><input type="range" id="b_${key}" min="70" max="150" value="100">
+      <label class="small">Contrast</label><input type="range" id="c_${key}" min="70" max="160" value="100">
+      <label class="small">Sharpness</label><input type="range" id="s_${key}" min="0" max="100" value="30">
+    </div>
+    <canvas id="canvas_${key}" style="display:none;"></canvas>
+    <div style="margin-top:8px;font-size:12px;color:var(--sub);">Result:</div>
+    <img id="out_${key}" style="max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:4px;display:none;">
+  </div>`;
+  document.getElementById('sides').appendChild(el);
+
+  const state={orig:null,rotDeg:0,rect:null,resultData:null};
+  const file=document.getElementById(`file_${key}`);
+  const stage=document.getElementById(`stage_${key}`);
+  const img=document.getElementById(`img_${key}`);
+  const box=document.getElementById(`cropbox_${key}`);
+  const rectEl=document.getElementById(`rect_${key}`);
+  const hTL=document.getElementById(`h_${key}_tl`), hBR=document.getElementById(`h_${key}_br`);
+  const out=document.getElementById(`out_${key}`);
+  const canvas=document.getElementById(`canvas_${key}`);
+  const bR=document.getElementById(`b_${key}`), cR=document.getElementById(`c_${key}`), sR=document.getElementById(`s_${key}`);
+
+  function applyLiveFilter(){
+    img.style.filter=`brightness(${bR.value}%) contrast(${cR.value}%)`;
+  }
+  [bR,cR].forEach(r=>r.oninput=applyLiveFilter);
+
+  function positionRect(){
+    if(!state.rect) return;
+    const w=box.clientWidth, h=img.clientHeight;
+    const x1=state.rect.x1*w, y1=state.rect.y1*h, x2=state.rect.x2*w, y2=state.rect.y2*h;
+    rectEl.style.left=x1+'px'; rectEl.style.top=y1+'px';
+    rectEl.style.width=(x2-x1)+'px'; rectEl.style.height=(y2-y1)+'px';
+    hTL.style.left=x1+'px'; hTL.style.top=y1+'px';
+    hBR.style.left=x2+'px'; hBR.style.top=y2+'px';
+  }
+  function dragHandle(handle,isTL){
+    let active=false;
+    const start=e=>{active=true;e.preventDefault();};
+    const move=e=>{
+      if(!active) return;
+      const pt=e.touches?e.touches[0]:e;
+      const r=box.getBoundingClientRect();
+      let x=(pt.clientX-r.left+box.scrollLeft)/box.clientWidth;
+      let y=(pt.clientY-r.top+box.scrollTop)/img.clientHeight;
+      x=Math.min(1,Math.max(0,x)); y=Math.min(1,Math.max(0,y));
+      if(isTL){state.rect.x1=Math.min(x,state.rect.x2-0.05);state.rect.y1=Math.min(y,state.rect.y2-0.05);}
+      else{state.rect.x2=Math.max(x,state.rect.x1+0.05);state.rect.y2=Math.max(y,state.rect.y1+0.05);}
+      positionRect();
+    };
+    const end=()=>active=false;
+    handle.addEventListener('mousedown',start); handle.addEventListener('touchstart',start);
+    window.addEventListener('mousemove',move); window.addEventListener('touchmove',move);
+    window.addEventListener('mouseup',end); window.addEventListener('touchend',end);
+  }
+  dragHandle(hTL,true); dragHandle(hBR,false);
+
+  file.onchange=()=>{
+    const f=file.files[0]; if(!f) return;
+    const reader=new FileReader();
+    reader.onerror=()=>alert('Could not read that file. Please try a JPG or PNG photo.');
+    reader.onload=ev=>{
+      state.orig=ev.target.result; state.rotDeg=0;
+      bR.value=100;cR.value=100;sR.value=30;
+      img.onerror=()=>alert('Could not load that image. Please try a different JPG or PNG.');
+      img.onload=()=>{
+        img.style.filter='none';
+        state.rect={x1:0.05,y1:0.05,x2:0.95,y2:0.95};
+        stage.style.display='block';
+        positionRect();
+      };
+      img.src=state.orig;
+      out.style.display='none'; state.resultData=null; updateButtons();
+    };
+    reader.readAsDataURL(f);
+  };
+
+  document.getElementById(`rot_${key}`).onclick=()=>{
+    state.rotDeg=(state.rotDeg+90)%360;
+    rotateImage();
+  };
+  function rotateImage(){
+    const tmp=new Image();
+    tmp.onload=()=>{
+      const c=document.createElement('canvas');
+      const sw=tmp.width, sh=tmp.height;
+      const swap = (state.rotDeg%180)!==0;
+      c.width=swap?sh:sw; c.height=swap?sw:sh;
+      const ctx=c.getContext('2d');
+      ctx.translate(c.width/2,c.height/2);
+      ctx.rotate(state.rotDeg*Math.PI/180);
+      ctx.drawImage(tmp,-sw/2,-sh/2);
+      img.onload=()=>{ state.rect={x1:0.05,y1:0.05,x2:0.95,y2:0.95}; positionRect(); };
+      img.src=c.toDataURL('image/jpeg',0.95);
+    };
+    tmp.onerror=()=>alert('Rotate failed — please re-upload the image.');
+    tmp.src=state.orig;
+  }
+
+  document.getElementById(`reset_${key}`).onclick=()=>{
+    state.rotDeg=0;
+    bR.value=100;cR.value=100;sR.value=30;
+    img.onload=()=>{img.style.filter='none';state.rect={x1:0.05,y1:0.05,x2:0.95,y2:0.95};positionRect();};
+    img.src=state.orig;
+    out.style.display='none'; state.resultData=null; updateButtons();
+  };
+
+  function sharpen(ctx,w,h,amt){
+    if(amt<=0) return;
+    const imgData=ctx.getImageData(0,0,w,h);
+    const src=new Uint8ClampedArray(imgData.data);
+    const d=imgData.data;
+    const k=amt/100*0.6;
+    const kernel=[0,-k,0,-k,1+4*k,-k,0,-k,0];
+    for(let y=1;y<h-1;y++){
+      for(let x=1;x<w-1;x++){
+        for(let ch=0;ch<3;ch++){
+          let sum=0,i=0;
+          for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+            sum+=src[((y+dy)*w+(x+dx))*4+ch]*kernel[i++];
+          }
+          d[(y*w+x)*4+ch]=sum;
+        }
+      }
+    }
+    ctx.putImageData(imgData,0,0);
+  }
+
+  function applyCrop(bake){
+    const nw=img.naturalWidth, nh=img.naturalHeight;
+    const x1=state.rect.x1*nw, y1=state.rect.y1*nh, x2=state.rect.x2*nw, y2=state.rect.y2*nh;
+    const cw=x2-x1, ch=y2-y1;
+    canvas.width=cw; canvas.height=ch;
+    const ctx=canvas.getContext('2d');
+    ctx.filter=`brightness(${bR.value}%) contrast(${cR.value}%)`;
+    ctx.drawImage(img,x1,y1,cw,ch,0,0,cw,ch);
+    if(bake) sharpen(ctx,cw,ch,sR.value);
+    state.resultData=canvas.toDataURL('image/jpeg',0.95);
+    out.src=state.resultData; out.style.display='block';
+    updateButtons();
+  }
+  document.getElementById(`apply_${key}`).onclick=()=>applyCrop(false);
+  document.getElementById(`enh_${key}`).onclick=()=>{
+    bR.value=Math.min(150,parseFloat(bR.value)+8);
+    cR.value=Math.min(160,parseFloat(cR.value)+15);
+    sR.value=55;
+    applyCrop(true);
+  };
+
+  window.addEventListener('resize',positionRect);
+  state.getResult=()=>state.resultData;
+  return state;
+}
+
+const sideFront=makeSide('front','CNIC Front');
+const sideBack=makeSide('back','CNIC Back');
+
+function updateButtons(){
+  const ready = sideFront.getResult() && sideBack.getResult();
+  document.getElementById('btnPDF').disabled=!ready;
+  document.getElementById('btnPrint').disabled=!ready;
+}
+
+function buildPageCanvas(dataUrl){
+  return new Promise(resolve=>{
+    const {w,h}=cardSize();
+    const gapX=(A4W-COLS*w)/(COLS+1);
+    const gapY=(A4H-ROWS*h)/(ROWS+1);
+    const scale=4; // px per mm for preview/print quality
+    const c=document.createElement('canvas');
+    c.width=A4W*scale; c.height=A4H*scale;
+    const ctx=c.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);
+    const im=new Image();
+    im.onload=()=>{
+      for(let r=0;r<ROWS;r++){
+        for(let col=0;col<COLS;col++){
+          const x=(gapX+col*(w+gapX))*scale;
+          const y=(gapY+r*(h+gapY))*scale;
+          ctx.drawImage(im,x,y,w*scale,h*scale);
+          ctx.strokeStyle='#ccc'; ctx.lineWidth=1;
+          ctx.strokeRect(x,y,w*scale,h*scale);
+        }
+      }
+      resolve(c);
+    };
+    im.src=dataUrl;
+  });
+}
+
+document.getElementById('btnPreview').onclick=async()=>{
+  const area=document.getElementById('previewArea'); area.innerHTML='';
+  const fData=sideFront.getResult(), bData=sideBack.getResult();
+  if(!fData||!bData){ area.innerHTML='<p style="color:var(--sub);font-size:13px;">Upload and crop both sides first (use Apply Crop) to see the A4 preview.</p>'; return; }
+  const c1=await buildPageCanvas(fData), c2=await buildPageCanvas(bData);
+  [['Page 1 — Front ×8',c1],['Page 2 — Back ×8',c2]].forEach(([label,c])=>{
+    const wrap=document.createElement('div'); wrap.className='card'; wrap.style.marginTop='10px';
+    wrap.innerHTML=`<div style="font-weight:700;font-size:13px;margin-bottom:6px;">${label}</div>`;
+    c.style.width='100%'; c.style.maxWidth='400px'; c.style.border='1px solid var(--line)'; c.style.borderRadius='6px';
+    wrap.appendChild(c);
+    area.appendChild(wrap);
+  });
+};
+
+document.getElementById('btnPDF').onclick=async()=>{
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({unit:'mm',format:'a4',orientation:'portrait'});
+  const {w,h}=cardSize();
+  const gapX=(A4W-COLS*w)/(COLS+1);
+  const gapY=(A4H-ROWS*h)/(ROWS+1);
+  async function addPage(dataUrl,isFirst){
+    if(!isFirst) doc.addPage();
+    for(let r=0;r<ROWS;r++) for(let col=0;col<COLS;col++){
+      const x=gapX+col*(w+gapX), y=gapY+r*(h+gapY);
+      doc.addImage(dataUrl,'JPEG',x,y,w,h,undefined,'NONE');
+    }
+  }
+  await addPage(sideFront.getResult(),true);
+  await addPage(sideBack.getResult(),false);
+  doc.save('CNIC_A4_Print.pdf');
+};
+
+document.getElementById('btnPrint').onclick=async()=>{
+  const c1=await buildPageCanvas(sideFront.getResult());
+  const c2=await buildPageCanvas(sideBack.getResult());
+  const w=window.open('','_blank');
+  w.document.write(`<html><head><title>Print CNIC A4</title><style>
+    @page{size:A4;margin:0;} body{margin:0;}
+    img{width:210mm;height:297mm;display:block;page-break-after:always;}
+  </style></head><body>
+  <img src="${c1.toDataURL('image/jpeg',0.98)}">
+  <img src="${c2.toDataURL('image/jpeg',0.98)}">
+  <script>window.onload=()=>{setTimeout(()=>window.print(),300);}<\/script>
+  </body></html>`);
+  w.document.close();
+};
+
+document.getElementById('btnDelete').onclick=()=>{
+  location.reload();
+};
+</script>
+</body>
+</html>
